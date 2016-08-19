@@ -1,0 +1,208 @@
+
+==========================
+Preprocess: 
+==========================
+
+Mesh generation:
+-------------------
+ - Meshgeneration source code (fortran) for wing or rotors: meshgen.f
+     > For VG, see: meshgen/vg/ and for wing, see: meshgen/wing/
+ - Mesh generation source code for background mesh: bg.f. See: meshgen/bg/
+
+ - To change VG height, use vg.inp.
+
+ - To compiles source codes in any dir (vg/, wing/ or bg/):
+     $ cd <dir>/
+     $ make clean
+     $ make
+
+     > Creates meshgen, postpro
+
+ 1. VG mesh gen:
+    ------------
+ - To generate VG wing :
+     $ cd vg/; make clean; make
+     $ ./meshgen < vg.inp
+     
+       > Creates blade.g
+ - To translate and rotatcde rigidly:
+     $ ./postpro
+
+       > Creates vg.g
+
+ - The above two steps can be done:
+     $ ./generate_mesh.sh 
+
+      > If 'permission denied' error from bash: chmod +x ./generate_mesh.sh
+
+ 2. wing mesh gen:
+    ------------
+ - To generate  wing :
+     $ cd wing/ ; make clean; make
+     $ ./meshgen < vg.inp
+     
+       > Creates wing.g
+
+ 3. bg mesh gen:
+    ------------
+     $ cd bg/ ; make clean; make
+     $ ./bg_grid <bg.inp
+
+Mesh splitting:
+---------------------
+make directory -- "grid" -- in your case folder containing g.* (grids) mesh.* (BCs) and ihcbc.*(Connectivity)
+-change the grid names to g.0 to g.ng-1 if they have different names -- this naming should correspond to process.inp content
+Note that once you change the name from something.g to g.1, they won't be readable by Tecplot anymore
+-the same sequence for mesh.* and ihcbc.*
+
+-ihcbc.*(Connectivity) wil be converted, after running the prepro, to ginter.*
+
+* process.inp, turns_std.inp and grid must be in case durection for preprocess, run and postprocess
+
+  - process.inp : input to split grids:
+    Ngrid: number of grids
+    Jsplit --> along i (chord-wise)
+    Ksplit --> along j (span-wise)
+    Lsplit --> along k (normal direction)
+
+  - Run: (in case directory)
+      > prepro < process.inp
+  - Generates split grids g.[0:nproc-1], mesh.[0:nproc-1] and inter.[0:nproc-1] 
+  - nproc is the number of the processors usually  
+
+  -link the solver from the source code in you
+r case directory
+      > ln -s ../../overturns/bin/overturns
+==========================
+Run:
+==========================
+To run: $ mpirun -np 12 ./overturns turns_std.inp >& out.log &
+
+g.* : grids p3d bin
+mesh.* : BC files corr each mesh
+inter.*: connectivity files for each mesh
+
+turns_std.inp: input file for inflow conditions
+
+s.* : solution files in p3d
+sg.*: grids corresponding to solution files in p3d
+
+To Restart:
+  - Create a directory (run_save/): 
+       $ mkdir run_save;
+  - Copy solution and grid files:
+       $ cp s.* sg.* resid.* proc.out_* run_save/
+  - Create symbolic links to (or copy) run_save/s.* to run directory:
+       > link: $ for ((i=0; i<12; i++)); do ln -s run1/s.$i r.$i; echo r.$i; done
+       > copy: $ for ((i=0; i<12; i++)); do cp run1/s.$i r.$i; echo r.$i; done
+
+** you could alternatively do this too: copy your solution and grid files.
+then move the s.* to r.*
+
+for ((i=0; i<12; i++)); do mv s.$i r.$i; echo r.$i; done
+
+
+  - To run: 
+       $ mpirun -np 12 ./overturns turns_std.inp >& out.log &
+  - Check residue: istep0,rsum,resmax,resrho,totime
+
+==========================
+Postprocess:
+==========================
+
+Attaching solution and corresponding grids from each core
+
+  - Create dir soln/  (the name must be soln)
+  - Run in the folder containing s.* and sg.* files:
+      $ postpro < process.inp
+  - This combines s.* (solution flies) and sg.* (grid files) and send them to soln
+  - Generates soln/sgrid.* soln/soln.* for as many original grids
+
+  - To generate Q-criterion plots:
+      $ cd soln/
+    > To generate Q-criterion for grid g.<ip> (ip=[0:ng-1]):
+      $ ../../../postpro/find_q sgrid.<ip> soln.<ip>
+  - This generates soln_qvort.p3d. 
+  - Copy soln_qvort.p3d to soln_qvort.<ip>
+      $ cp soln_qvort.p3d soln_q1101vort.<ip>
+  - Use tecplot to load grid file: sgrid.<ip> and solution file: soln_qvort.<ip>
+
+
+Calculate forces (intergating over the spa
+------------------------
+
+run this in the directory with the solution files (soln)
+>../../../postpro/calculate_force sgrid.[0 ng-1] soln.[0 ng-1]
+---you are then asked to enter TE index number
+
+!-------------------------
+! Help scripts
+!-----------------------
+find ./ -name soln
+
+====================================================================================
+
+-----------------------------------------------------------------
+grid/Mesh.* and grid/IHCBC.* formats
+-----------------------------------------------------------------
+JMAX KMAX LMAX JTAIL1 KBEG KTIP  <grid-file-prefix> <restart-file-prefix> <solution-file-prefix>
+
+$BCINP
+   IROT_DIR = 1 ... For Clock-wise rotation
+            = 0 ... No rotation
+
+           > Valid only for unsteady run. Ignored for fixed-wing case.
+
+   NBC : Number of BCs
+   IBTYP : Number denoting kind of BC
+           >  5 = Wall (for wing)
+           >  4 = Wall (for wall of BG and wing side wall)
+           > 51 = Wake
+           >  3 = Inviscid wall
+           > 47 = Characteristic BC or Freestream
+
+   IBDIR : Along which plane BCs is applied
+           >  1 = along JMIN plane
+           > -1 = along JMAX plane
+
+           >  2 = along kMIN plane
+           > -2 = along kMIN plane
+             (wall)
+           >  3 = along LMAX plane
+           > -3 = along LMAX plane
+
+   JBCS : J start location of this BC
+   JBCE : J end   location of this BC
+   
+   !example:
+   !for wall (5): JBCS=jtail, JBCE=-jtail
+   !for the wake (51) behind TE: JBCS=1, JBCE=jtail  (only half top of the wake)
+                                 KBCS=1 (start from the BG wall),KBCE=-1
+                                 LBCS=LBCE=1=location of wing wake
+                                 IBDIR=3 (wall nomra)
+   
+   ! for the wake (51) behind tip: JBCS=1, JBCE=(Jmax+1)/2=JLE
+   !                               KBCS=KBCE=-1 (that is the symmetry plane along  the chord, note "1" is the side wall)
+                                    LBCS=2 one point detached from the wall
+                                    LBCE=-1 location of wing wake
+
+   KBCS : K start location of this BC
+   KBCE : K end   location of this BC
+
+   LBCS : L start location of this BC
+   LBCE : L end   location of this BC
+   
+   IBPROC = Proc with which this plane interacts with
+          = 0 ! Default
+$END
+
+--------------------------------
+IHCBC: Implicit-hole cutting BCs 
+--------------------------------
+
+The format is identical. But, IBTYP specifications are different for IHCBC.
+  
+   IBTYP : Number denoting kind of BC
+           > 5 = Wall
+           > 3 = Fringe layer (applied to contained inner mesh)
+           > 1 = Immune cells in wall normal direction
